@@ -385,7 +385,7 @@ class BertSelfOutput(nn.Module):
     def forward(self, hidden_states: torch.Tensor, input_tensor: torch.Tensor) -> torch.Tensor:
         hidden_states = self.dense(hidden_states)
         hidden_states = self.dropout(hidden_states)
-        # second residual connection
+        # first residual connection
         hidden_states = self.LayerNorm(hidden_states + input_tensor)
         return hidden_states
 
@@ -464,7 +464,7 @@ class BertOutput(nn.Module):
     def forward(self, hidden_states: torch.Tensor, input_tensor: torch.Tensor) -> torch.Tensor:
         hidden_states = self.dense(hidden_states)
         hidden_states = self.dropout(hidden_states)
-        # first residual connection
+        # second residual connection
         hidden_states = self.LayerNorm(hidden_states + input_tensor)
         return hidden_states
 
