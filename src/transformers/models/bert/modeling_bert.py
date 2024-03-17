@@ -381,12 +381,16 @@ class BertSelfOutput(nn.Module):
         self.dense = nn.Linear(config.hidden_size, config.hidden_size)
         self.LayerNorm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
+        self.residuals = config.residuals
 
     def forward(self, hidden_states: torch.Tensor, input_tensor: torch.Tensor) -> torch.Tensor:
         hidden_states = self.dense(hidden_states)
         hidden_states = self.dropout(hidden_states)
         # first residual connection
-        hidden_states = self.LayerNorm(hidden_states + input_tensor)
+        if self.residuals:
+            hidden_states = self.LayerNorm(hidden_states + input_tensor)
+        else:
+            hidden_states = self.LayerNorm(hidden_states)
         return hidden_states
 
 
@@ -460,12 +464,16 @@ class BertOutput(nn.Module):
         self.dense = nn.Linear(config.intermediate_size, config.hidden_size)
         self.LayerNorm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
+        self.residuals = config.residuals
 
     def forward(self, hidden_states: torch.Tensor, input_tensor: torch.Tensor) -> torch.Tensor:
         hidden_states = self.dense(hidden_states)
         hidden_states = self.dropout(hidden_states)
         # second residual connection
-        hidden_states = self.LayerNorm(hidden_states + input_tensor)
+        if self.residuals:
+            hidden_states = self.LayerNorm(hidden_states + input_tensor)
+        else:
+            hidden_states = self.LayerNorm(hidden_states)
         return hidden_states
 
 
@@ -689,10 +697,10 @@ class BertLMPredictionHead(nn.Module):
         # an output-only bias for each token.
         self.decoder = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
 
-        self.bias = nn.Parameter(torch.zeros(config.vocab_size))
+        # self.bias = nn.Parameter(torch.zeros(config.vocab_size))
 
         # Need a link between the two variables so that the bias is correctly resized with `resize_token_embeddings`
-        self.decoder.bias = self.bias
+        # self.decoder.bias = self.bias
 
     def forward(self, hidden_states):
         hidden_states = self.transform(hidden_states)
