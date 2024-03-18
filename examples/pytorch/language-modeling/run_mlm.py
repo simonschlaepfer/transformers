@@ -81,6 +81,10 @@ class ModelArguments:
         default=None,
         metadata={"help": "If training from scratch, pass a model type from the list: " + ", ".join(MODEL_TYPES)},
     )
+    embedding_path: Optional[str] = field(
+        default=None,
+        metadata={"help": "The path to a trained model from which to take the embedding for this model."},
+    )
     config_overrides: Optional[str] = field(
         default=None,
         metadata={
@@ -438,6 +442,25 @@ def main():
     else:
         logger.info("Training new model from scratch")
         model = AutoModelForMaskedLM.from_config(config, trust_remote_code=model_args.trust_remote_code)
+
+    # TODO: New embedding loading from trained model & embedding freeze
+    if model_args.embedding_path is not None:
+        # Load the embedding from the trained model
+        embedding_model = AutoModelForMaskedLM.from_pretrained(
+            model_args.embedding_path,
+            from_tf=bool(".ckpt" in model_args.embedding_path),
+            config=config,
+            cache_dir=model_args.cache_dir,
+            revision=model_args.model_revision,
+            token=model_args.token,
+            trust_remote_code=model_args.trust_remote_code,
+            low_cpu_mem_usage=model_args.low_cpu_mem_usage,
+        )
+        embedding = embedding_model.get_input_embeddings().weight
+        # Set the embedding in the model
+        model.get_input_embeddings().weight = embedding
+        # Freeze the embedding
+        model.get_input_embeddings().weight.requires_grad = False
 
     # We resize the embeddings only when necessary to avoid index errors. If you are creating a model from scratch
     # on a small vocab and want a smaller embedding size, remove this test.
