@@ -30,6 +30,7 @@ from dataclasses import dataclass, field
 from itertools import chain
 from typing import Optional
 
+import torch
 import datasets
 import evaluate
 from datasets import load_dataset
@@ -84,6 +85,10 @@ class ModelArguments:
     embedding_path: Optional[str] = field(
         default=None,
         metadata={"help": "The path to a trained model from which to take the embedding for this model."},
+    )
+    check_embeddings: Optional[bool] = field(
+        default=False,
+        metadata={"help": "Check if the embeddings of the two models are identical. Needs embedding_path and model_name_or_path."},
     )
     config_overrides: Optional[str] = field(
         default=None,
@@ -457,10 +462,15 @@ def main():
             low_cpu_mem_usage=model_args.low_cpu_mem_usage,
         )
         embedding = embedding_model.get_input_embeddings().weight
-        # Set the embedding in the model
-        model.get_input_embeddings().weight = embedding
-        # Freeze the embedding
-        model.get_input_embeddings().weight.requires_grad = False
+        if model_args.check_embeddings:
+            # Just check if the embeddings are the same
+            assert torch.allclose(embedding, model.get_input_embeddings().weight, atol=1e-4)
+            logger.warning("############################## EMBEDDINGS ARE THE SAME ############################################")
+        else:
+            # Set the embedding in the model
+            model.bert.embeddings.word_embeddings.weight = embedding
+            # Freeze the embedding
+            model.bert.embeddings.word_embeddings.weight.requires_grad = False
 
     # We resize the embeddings only when necessary to avoid index errors. If you are creating a model from scratch
     # on a small vocab and want a smaller embedding size, remove this test.
