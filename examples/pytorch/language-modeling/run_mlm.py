@@ -298,11 +298,11 @@ def main():
         res_string = "with"
 
     model_name = f"bert_seed_{training_args.seed}_layers_{num_layers}_heads_{num_heads}_{res_string}_residuals"
-    training_args.output_dir = f"../{model_name}"
+    training_args.output_dir = f"./trained_models/{model_name}"
     training_args.run_name = model_name
 
     if model_args.use_parent_embeddings:
-        model_args.embedding_path = f"../bert_seed_{training_args.parent_seed}_layers_{num_layers}_heads_{num_heads}_{res_string}_residuals/statedict.pth"
+        model_args.embedding_path = f"./trained_models/bert_seed_{model_args.parent_seed}_layers_{num_layers}_heads_{num_heads}_{res_string}_residuals/statedict.pth"
 
     # Sending telemetry. Tracking the example usage helps us better allocate resources to maintain them. The
     # information sent is the one passed as arguments along with your Python/PyTorch versions.
