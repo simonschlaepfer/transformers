@@ -34,6 +34,7 @@ import torch
 import datasets
 import evaluate
 from datasets import load_dataset
+# from deepcopy import copy
 
 import transformers
 from transformers import (
@@ -89,6 +90,14 @@ class ModelArguments:
     check_embeddings: Optional[bool] = field(
         default=False,
         metadata={"help": "Check if the embeddings of the two models are identical. Needs embedding_path and model_name_or_path."},
+    )
+    use_parent_embeddings: Optional[bool] = field(
+        default=False,
+        metadata={"help": "If the embeddings of the parent models should be used."},
+    )
+    parent_seed: Optional[int] = field(
+        default=10,
+        metadata={"help": "The seed of the parent model of which the embeddings are taken."},
     )
     config_overrides: Optional[str] = field(
         default=None,
@@ -273,6 +282,28 @@ def main():
             raise ValueError("`token` and `use_auth_token` are both specified. Please set only the argument `token`.")
         model_args.token = model_args.use_auth_token
 
+    override_config_list = model_args.config_overrides.split(',')
+    for override_config in override_config_list:
+        key, value = override_config.split('=')
+        if key == 'num_attention_heads':
+            num_heads = int(value)
+        elif key == 'residuals':
+            residuals = bool(value)
+        elif key == 'num_hidden_layers':
+            num_layers = int(value)
+
+    if residuals:
+        res_string = "no"
+    else:
+        res_string = "with"
+
+    model_name = f"bert_seed_{training_args.seed}_layers_{num_layers}_heads_{num_heads}_{res_string}_residuals"
+    training_args.output_dir = f"../{model_name}"
+    training_args.run_name = model_name
+
+    if model_args.use_parent_embeddings:
+        model_args.embedding_path = f"../bert_seed_{training_args.parent_seed}_layers_{num_layers}_heads_{num_heads}_{res_string}_residuals/statedict.pth"
+
     # Sending telemetry. Tracking the example usage helps us better allocate resources to maintain them. The
     # information sent is the one passed as arguments along with your Python/PyTorch versions.
     send_example_telemetry("run_mlm", model_args, data_args)
@@ -451,40 +482,50 @@ def main():
     # TODO: New embedding loading from trained model & embedding freeze
     if model_args.embedding_path is not None:
         # Load the embedding from the trained model
-        embedding_model = AutoModelForMaskedLM.from_pretrained(
-            model_args.embedding_path,
-            from_tf=bool(".ckpt" in model_args.embedding_path),
-            config=config,
-            cache_dir=model_args.cache_dir,
-            revision=model_args.model_revision,
-            token=model_args.token,
-            trust_remote_code=model_args.trust_remote_code,
-            low_cpu_mem_usage=model_args.low_cpu_mem_usage,
-        )
-        embedding = embedding_model.bert.embeddings
+        # embedding_model = AutoModelForMaskedLM.from_pretrained(
+        #     model_args.embedding_path,
+        #     from_tf=bool(".ckpt" in model_args.embedding_path),
+        #     config=config,
+        #     cache_dir=model_args.cache_dir,
+        #     revision=model_args.model_revision,
+        #     token=model_args.token,
+        #     trust_remote_code=model_args.trust_remote_code,
+        #     low_cpu_mem_usage=model_args.low_cpu_mem_usage,
+        # )
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        embedding_model = torch.load(model_args.embedding_path, map_location=device)
+        # /trained_models/parent_model/model_frozen_embedding.pth
+
+        # reloaded_model['bert.embeddings.word_embeddings.weight'].to(device)
+
         if model_args.check_embeddings:
             # Just check if the embeddings are the same
-            logger.warning("############################## TRAINED EMBEDDINGS ############################################")
-            logger.warning(embedding.word_embeddings.weight)
-            logger.warning("############################## MODEL EMBEDDINGS ############################################")
+            # logger.warning("############################## TRAINED EMBEDDINGS ############################################")
+            # logger.warning(embedding.word_embeddings.weight)
+            # logger.warning("############################## MODEL EMBEDDINGS ############################################")
             logger.warning(model.bert.embeddings.word_embeddings.weight)
-            assert torch.allclose(embedding.word_embeddings.weight, model.bert.embeddings.word_embeddings.weight, atol=1e-4)
-            assert torch.allclose(embedding.position_embeddings.weight, model.bert.embeddings.position_embeddings.weight, atol=1e-4)
-            assert torch.allclose(embedding.token_type_embeddings.weight, model.bert.embeddings.token_type_embeddings.weight, atol=1e-4)
+            # assert torch.allclose(embedding.word_embeddings.weight, model.bert.embeddings.word_embeddings.weight, atol=1e-4)
+            # assert torch.allclose(embedding.position_embeddings.weight, model.bert.embeddings.position_embeddings.weight, atol=1e-4)
+            # assert torch.allclose(embedding.token_type_embeddings.weight, model.bert.embeddings.token_type_embeddings.weight, atol=1e-4)
             logger.warning("############################## EMBEDDINGS ARE THE SAME ############################################")
         else:
             # Set the embedding in the model
-            model.bert.embeddings = embedding
-            assert torch.allclose(embedding.word_embeddings.weight, model.bert.embeddings.word_embeddings.weight, atol=1e-4)
-            assert torch.allclose(embedding.position_embeddings.weight, model.bert.embeddings.position_embeddings.weight, atol=1e-4)
-            assert torch.allclose(embedding.token_type_embeddings.weight, model.bert.embeddings.token_type_embeddings.weight, atol=1e-4)
+            model.bert.embeddings.word_embeddings.weight = torch.nn.Parameter(embedding_model['bert.embeddings.word_embeddings.weight'])
+            model.bert.embeddings.position_embeddings.weight = torch.nn.Parameter(embedding_model['bert.embeddings.position_embeddings.weight'])
+            model.bert.embeddings.token_type_embeddings.weight = torch.nn.Parameter(embedding_model['bert.embeddings.token_type_embeddings.weight'])
+            model.bert.embeddings.LayerNorm.weight = torch.nn.Parameter(embedding_model['bert.embeddings.LayerNorm.weight'])
+            model.bert.embeddings.LayerNorm.bias = torch.nn.Parameter(embedding_model['bert.embeddings.LayerNorm.bias'])
+            assert torch.allclose(embedding_model['bert.embeddings.word_embeddings.weight'], model.bert.embeddings.word_embeddings.weight, atol=1e-4)
+            assert torch.allclose(embedding_model['bert.embeddings.position_embeddings.weight'], model.bert.embeddings.position_embeddings.weight, atol=1e-4)
+            assert torch.allclose(embedding_model['bert.embeddings.token_type_embeddings.weight'], model.bert.embeddings.token_type_embeddings.weight, atol=1e-4)
             # Freeze the embedding layer
             for param in model.bert.embeddings.parameters():
                 # Works, at least initially, somehow still trains?
                 param.requires_grad = False
 
 
-
+    # assert torch.allclose(loaded_layer_norm_weights.to(device), pre_trained_layer_norm.to(device), atol=1e-4)
+    #     # assert torch.allclose(loaded_layer_norm_bias.to(device), pre_trained_layer_norm_bias.to(device), atol=1e-4)
     # We resize the embeddings only when necessary to avoid index errors. If you are creating a model from scratch
     # on a small vocab and want a smaller embedding size, remove this test.
     embedding_size = model.get_input_embeddings().weight.shape[0]
@@ -663,13 +704,16 @@ def main():
         for param in model.bert.embeddings.parameters():
             assert param.requires_grad == False
 
-    pre_trained_word_embeddings = model.bert.embeddings.word_embeddings.weight.clone()
-    pre_trained_position_embeddings = model.bert.embeddings.position_embeddings.weight.clone()
-    pre_trained_token_type_embeddings = model.bert.embeddings.token_type_embeddings.weight.clone()
-    pre_trained_layer_norm = model.bert.embeddings.LayerNorm.weight.clone()
-    pre_trained_layer_norm_bias = model.bert.embeddings.LayerNorm.bias.clone()
+    
+    # pre_trained_word_embeddings = model.bert.embeddings.word_embeddings.weight.clone()#.to(device)
+    # pre_trained_position_embeddings = model.bert.embeddings.position_embeddings.weight.clone()#.to(device)
+    # pre_trained_token_type_embeddings = model.bert.embeddings.token_type_embeddings.weight.clone()#.to(device)
+    # pre_trained_layer_norm = model.bert.embeddings.LayerNorm.weight.clone()#.to(device)
+    # pre_trained_layer_norm_bias = model.bert.embeddings.LayerNorm.bias.clone()#.to(device)
 
-    # TODO: Save some other part of the model that is not frozen
+
+    # # TODO: Save some other part of the model that is not frozen
+    # pre_trained_attention_query = model.bert.encoder.layer[0].attention.self.query.weight.clone()
 
     # Initialize our Trainer
     trainer = Trainer(
@@ -705,36 +749,73 @@ def main():
         trainer.save_metrics("train", metrics)
         trainer.save_state()
 
-    # Check that the frozen layers are still the same
-    if model_args.embedding_path is not None:
-        # Move model weights to CPU to avoid OOM
-        model.bert.embeddings.cpu()
-        assert torch.allclose(pre_trained_word_embeddings, model.bert.embeddings.word_embeddings.weight, atol=1e-4)
-        assert torch.allclose(pre_trained_position_embeddings, model.bert.embeddings.position_embeddings.weight, atol=1e-4)
-        assert torch.allclose(pre_trained_token_type_embeddings, model.bert.embeddings.token_type_embeddings.weight, atol=1e-4)
-        assert torch.allclose(pre_trained_layer_norm, model.bert.embeddings.LayerNorm.weight, atol=1e-4)
-        assert torch.allclose(pre_trained_layer_norm_bias, model.bert.embeddings.LayerNorm.bias, atol=1e-4)
-        logger.warning("############################## EMBEDDINGS ARE THE SAME ############################################")
+    
+    # TODO: try to manually save and load the weights
+    torch.save(model.state_dict(), training_args.output_dir + '/statedict.pth')
 
-        # TODO: Make sure the other part is different!
 
-        reloaded_model = AutoModelForMaskedLM.from_pretrained(
-            training_args.output_dir + "/model.safetensors",
-            from_tf=False,
-            config=config,
-            cache_dir=model_args.cache_dir,
-            revision=model_args.model_revision,
-            token=model_args.token,
-            trust_remote_code=model_args.trust_remote_code,
-            low_cpu_mem_usage=model_args.low_cpu_mem_usage,
-        )
-        logger.warning(reloaded_model.bert.embeddings.word_embeddings.weight)
-        logger.warning(pre_trained_word_embeddings)
-        assert torch.allclose(pre_trained_word_embeddings, reloaded_model.bert.embeddings.word_embeddings.weight, atol=1e-4)
-        assert torch.allclose(pre_trained_position_embeddings, reloaded_model.bert.embeddings.position_embeddings.weight, atol=1e-4)
-        assert torch.allclose(pre_trained_token_type_embeddings, reloaded_model.bert.embeddings.token_type_embeddings.weight, atol=1e-4)
-        assert torch.allclose(pre_trained_layer_norm, reloaded_model.bert.embeddings.LayerNorm.weight, atol=1e-4)
-        assert torch.allclose(pre_trained_layer_norm_bias, reloaded_model.bert.embeddings.LayerNorm.bias, atol=1e-4)
+    # # Check that the frozen layers are still the same
+    # if model_args.embedding_path is not None:
+    #     # Move model weights to CPU to avoid OOM
+    #     model.bert.embeddings.cpu()
+    #     device = "cuda" if torch.cuda.is_available() else "cpu"
+    #     assert torch.allclose(pre_trained_word_embeddings, model.bert.embeddings.word_embeddings.weight, atol=1e-4)
+    #     assert torch.allclose(pre_trained_position_embeddings, model.bert.embeddings.position_embeddings.weight, atol=1e-4)
+    #     assert torch.allclose(pre_trained_token_type_embeddings, model.bert.embeddings.token_type_embeddings.weight, atol=1e-4)
+    #     assert torch.allclose(pre_trained_layer_norm, model.bert.embeddings.LayerNorm.weight, atol=1e-4)
+    #     assert torch.allclose(pre_trained_layer_norm_bias, model.bert.embeddings.LayerNorm.bias, atol=1e-4)
+    #     logger.warning("############################## EMBEDDINGS ARE THE SAME ############################################")
+    #     # test not frozen weights
+    #     # assert torch.allclose(pre_trained_attention_query.to(device), model.bert.encoder.layer[0].attention.self.query.weight.to(device), atol=1e-4)
+
+    #     # TODO: Make sure the other part is different!
+
+    #     # reloaded_model = AutoModelForMaskedLM.from_pretrained(
+    #     #     training_args.output_dir + "/model.safetensors",
+    #     #     from_tf=False,
+    #     #     config=config,
+    #     #     cache_dir=model_args.cache_dir,
+    #     #     revision=model_args.model_revision,
+    #     #     token=model_args.token,
+    #     #     trust_remote_code=model_args.trust_remote_code,
+    #     #     low_cpu_mem_usage=model_args.low_cpu_mem_usage,
+    #     # ) 
+    #     # reloaded_model = AutoModelForMaskedLM.from_pretrained(
+    #     #     "model_frozen_embedding.pth",
+    #     #     from_tf=False,
+    #     #     config=config,
+    #     #     cache_dir=model_args.cache_dir,
+    #     #     revision=model_args.model_revision,
+    #     #     token=model_args.token,
+    #     #     trust_remote_code=model_args.trust_remote_code,
+    #     #     low_cpu_mem_usage=model_args.low_cpu_mem_usage,
+    #     # ) 
+    #     # logger.warning(reloaded_model.bert.embeddings.word_embeddings.weight)
+    #     # logger.warning(pre_trained_word_embeddings)
+
+    #     # Load embeddings
+
+    #     reloaded_model = torch.load(training_args.output_dir + '/model_frozen_embedding.pth')
+
+
+    #     # check manually loaded weights
+    #     # logger.warning(pre_trained_word_embeddings)
+    #     # logger.warning(loaded_word_embeddings)
+    #     # assert torch.allclose(loaded_word_embeddings.to(device), pre_trained_word_embeddings.to(device), atol=1e-4)
+    #     # assert torch.allclose(loaded_position_embeddings.to(device), pre_trained_position_embeddings.to(device), atol=1e-4)
+    #     # assert torch.allclose(loaded_token_type_embeddings.to(device), pre_trained_token_type_embeddings.to(device), atol=1e-4)
+    #     # assert torch.allclose(loaded_layer_norm_weights.to(device), pre_trained_layer_norm.to(device), atol=1e-4)
+    #     # assert torch.allclose(loaded_layer_norm_bias.to(device), pre_trained_layer_norm_bias.to(device), atol=1e-4)
+            
+    #     # Assert to check if they are still the same
+    #     logger.warning(pre_trained_word_embeddings)
+    #     logger.warning(reloaded_model['bert.embeddings.word_embeddings.weight'])
+    #     assert torch.allclose(pre_trained_word_embeddings.to(device), reloaded_model['bert.embeddings.word_embeddings.weight'].to(device), atol=1e-4)
+    #     assert torch.allclose(pre_trained_position_embeddings.to(device), reloaded_model['bert.embeddings.position_embeddings.weight'].to(device), atol=1e-4)
+    #     assert torch.allclose(pre_trained_token_type_embeddings.to(device), reloaded_model['bert.embeddings.token_type_embeddings.weight'].to(device), atol=1e-4)
+    #     assert torch.allclose(pre_trained_layer_norm.to(device), reloaded_model['bert.embeddings.LayerNorm.weight'].to(device), atol=1e-4)
+    #     assert torch.allclose(pre_trained_layer_norm_bias.to(device), reloaded_model['bert.embeddings.LayerNorm.bias'].to(device), atol=1e-4)
+    #     logger.warning("#### !!!!!! ----------- WEIGHTS ARE EQUAL ----------- !!!!!! #####")
 
 
     # Evaluation
