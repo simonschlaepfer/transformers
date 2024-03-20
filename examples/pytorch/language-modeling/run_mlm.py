@@ -293,9 +293,9 @@ def main():
             num_layers = int(value)
 
     if residuals:
-        res_string = "no"
-    else:
         res_string = "with"
+    else:
+        res_string = "no"
 
     model_name = f"bert_seed_{training_args.seed}_layers_{num_layers}_heads_{num_heads}_{res_string}_residuals"
     training_args.output_dir = f"./trained_models/{model_name}"
